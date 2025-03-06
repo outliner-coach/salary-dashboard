@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>직군별 경력연차 연봉 그래프</title>
+    <style>
+      body {
+        font-family: 'Roboto', sans-serif;
+        background-color: #f5f5f5;
+        margin: 0;
+        padding: 20px;
+      }
+      h1 {
+        color: #333;
+        text-align: center;
+        margin-bottom: 20px;
+      }
+      #dashboard_div {
+        background: #fff;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        max-width: 900px;
+        margin: 20px auto;
+      }
+      .filter-container {
+        margin-bottom: 15px;
+      }
+      #table_div {
+        margin-top: 20px;
+      }
+    </style>
+    <!-- Google Charts 로드 (controls, table 패키지 포함) -->
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script>
+      /**************************************************
+       * 1. JSON 데이터 파싱 – 문자열 리터럴로 감싸기
+       **************************************************/
+      var rawData = JSON.parse('<?!= jsonData ?>');
+      console.log("rawData:", rawData);
+      
+      /**************************************************
+       * 2. 경력연차 문자열에서 숫자만 추출하는 함수
+       **************************************************/
+      function parseYear(str) {
+        var s = String(str);
+        var match = s.match(/\d+/);
+        return match ? parseInt(match[0], 10) : 0;
+      }
+      
+      /**************************************************
+       * 3. 전체 데이터(allData) 배열 구성:
+       *    { jobCategory, year, salary }
+       **************************************************/
+      var allData = [];
+      for (var i = 0; i < rawData.length; i++) {
+        var row = rawData[i];
+        var jobCategory = row['직군'];
+        var year = parseYear(row['경력연차']);
+        var salary = Number(row['연봉']) || 0;
+        allData.push({ jobCategory: jobCategory, year: year, salary: salary });
+      }
+      console.log("allData:", allData);
+      
+      /**************************************************
+       * 4. 전체 데이터를 이용한 선형 회귀 (salary = a + b * year)
+       **************************************************/
+      var n = allData.length, sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+      for (var i = 0; i < n; i++) {
+        var x = allData[i].year;
+        var y = allData[i].salary;
+        sumX += x;
+        sumY += y;
+        sumXY += x * y;
+        sumX2 += x * x;
+      }
+      var b = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+      var a = (sumY - b * sumX) / n;
+      console.log("Regression: a =", a, " b =", b);
+      
+      /**************************************************
+       * 5. 직군별 보정 계수 계산 (평균 오차)
+       **************************************************/
+      var categorySums = {}, categoryCounts = {};
+      for (var i = 0; i < n; i++) {
+        var item = allData[i];
+        var baseline = a + b * item.year;
+        var error = item.salary - baseline;
+        if (!categorySums[item.jobCategory]) {
+          categorySums[item.jobCategory] = 0;
+          categoryCounts[item.jobCategory] = 0;
+        }
+        categorySums[item.jobCategory] += error;
+        categoryCounts[item.jobCategory] += 1;
+      }
+      var corrections = {};
+      for (var cat in categorySums) {
+        corrections[cat] = categorySums[cat] / categoryCounts[cat];
+      }
+      console.log("Corrections:", corrections);
+      
+      /**************************************************
+       * 6. 예측 데이터(predictedData) – 각 직군별 1~20년 예상 연봉 산출
+       *    예상연봉 = (a + b * year) + corrections[jobCategory]
+       *    → 원 단위에서 백만원 단위로 반올림 후 만원 단위로 변환
+       **************************************************/
+      var predictedData = [];
+      for (var cat in corrections) {
+        for (var yearVal = 1; yearVal <= 20; yearVal++) {
+          var predicted = a + b * yearVal + corrections[cat]; // 원 단위
+          var predictedRounded = Math.round(predicted / 1000000) * 100; // 만원 단위, 예: 4000 → "4,000만원"
+          predictedData.push({
+            직군: cat,
+            경력연차: yearVal,
+            예상연봉: predictedRounded
+          });
+        }
+      }
+      console.log("predictedData:", predictedData);
+      
+      /**************************************************
+       * 7. 실제 데이터(actualData) – 각 직군·경력연차별 실제 연봉 평균 계산
+       **************************************************/
+      var actualAggregation = {};
+      for (var i = 0; i < allData.length; i++) {
+        var item = allData[i];
+        var yr = item.year;
+        if (yr < 1 || yr > 20) continue;
+        var cat = item.jobCategory;
+        if (!actualAggregation[cat]) {
+          actualAggregation[cat] = {};
+        }
+        if (!actualAggregation[cat][yr]) {
+          actualAggregation[cat][yr] = { sum: 0, count: 0 };
+        }
+        actualAggregation[cat][yr].sum += item.salary;
+        actualAggregation[cat][yr].count += 1;
+      }
+      var actualData = [];
+      for (var cat in corrections) {
+        for (var yearVal = 1; yearVal <= 20; yearVal++) {
+          var avg = null;
+          if (actualAggregation[cat] && actualAggregation[cat][yearVal] && actualAggregation[cat][yearVal].count > 0) {
+            avg = actualAggregation[cat][yearVal].sum / actualAggregation[cat][yearVal].count;
+            avg = Math.round(avg / 1000000) * 100; // 만원 단위
+          }
+          actualData.push({
+            직군: cat,
+            경력연차: yearVal,
+            실제연봉: avg
+          });
+        }
+      }
+      console.log("actualData:", actualData);
+      
+      /**************************************************
+       * 8. 최종 데이터(combinedData) – 각 행에 대해 직군, 경력연차, 예상연봉, 실제연봉
+       **************************************************/
+      var combinedData = [];
+      for (var i = 0; i < predictedData.length; i++) {
+        var pred = predictedData[i];
+        var act = actualData.find(function(item) {
+          return item.직군 === pred.직군 && item.경력연차 === pred.경력연차;
+        });
+        combinedData.push({
+          직군: pred.직군,
+          경력연차: pred.경력연차,
+          예상연봉: pred.예상연봉,
+          실제연봉: act ? act.실제연봉 : null
+        });
+      }
+      console.log("combinedData:", combinedData);
+      
+      /**************************************************
+       * 9. DataTable 구성 – 4개 열: 직군, 경력연차, 예상연봉(만원), 실제연봉(만원)
+       **************************************************/
+      var dataTable = new google.visualization.DataTable();
+      dataTable.addColumn('string', '직군');
+      dataTable.addColumn('number', '경력연차');
+      dataTable.addColumn('number', '예상연봉(만원)');
+      dataTable.addColumn('number', '실제연봉(만원)');
+      for (var i = 0; i < combinedData.length; i++) {
+        var row = combinedData[i];
+        dataTable.addRow([row.직군, row.경력연차, row.예상연봉, row.실제연봉]);
+      }
+      // 경력연차를 "n년차"로 표기 (표에만 적용)
+      for (var i = 0; i < dataTable.getNumberOfRows(); i++) {
+        var yr = dataTable.getValue(i, 1);
+        dataTable.setFormattedValue(i, 1, yr + "년차");
+      }
+      // 연봉 열 포매터 – "#,###만원"
+      var salaryFormatter = new google.visualization.NumberFormat({ pattern: "#,###만원" });
+      salaryFormatter.format(dataTable, 2);
+      salaryFormatter.format(dataTable, 3);
+      
+      /**************************************************
+       * 10. 대시보드 구성
+       **************************************************/
+      var dashboard, jobCategoryFilter, table, chart;
+      google.charts.load('current', { packages: ['corechart', 'controls', 'table'] });
+      google.charts.setOnLoadCallback(drawDashboard);
+      
+      function drawDashboard() {
+        console.log("drawDashboard called");
+        dashboard = new google.visualization.Dashboard(document.getElementById('dashboard_div'));
+        
+        // 직군 필터 – 복수 선택 가능
+        jobCategoryFilter = new google.visualization.ControlWrapper({
+          controlType: 'CategoryFilter',
+          containerId: 'jobCategory_filter_div',
+          options: {
+            filterColumnLabel: '직군',
+            ui: {
+              label: '직군 선택:',
+              allowTyping: false,
+              allowMultiple: true,
+              allowNone: true
+            }
+          }
+        });
+        
+        // Table – 상세 데이터 표시 (바인딩)
+        table = new google.visualization.ChartWrapper({
+          chartType: 'Table',
+          containerId: 'table_div',
+          options: {
+            width: '100%',
+            page: 'enable',
+            pageSize: 25,
+            sortColumn: 1,
+            sortAscending: true
+          }
+        });
+        
+        // Chart – 예측 및 실제 연봉을 집계하여 표시
+        // (여기서는 binding 없이 별도로 업데이트)
+        chart = new google.visualization.ChartWrapper({
+          chartType: 'ColumnChart',
+          containerId: 'chart_div',
+          options: {
+            title: '경력연차별 예상/실제 연봉 (선택된 직군 합산)',
+            hAxis: {
+              title: '경력연차',
+              viewWindowMode: 'explicit',
+              viewWindow: { min: 1, max: 20 }
+            },
+            vAxis: { title: '연봉(만원)' },
+            legend: { position: 'top' },
+            colors: ['#4285F4', '#DB4437']
+          }
+        });
+        
+        // 대시보드에는 Table만 바인딩 (상세 데이터)
+        dashboard.bind([jobCategoryFilter], table);
+        dashboard.draw(dataTable);
+        
+        // Chart 업데이트는 별도로 실행 (집계 처리)
+        google.visualization.events.addListener(jobCategoryFilter, 'statechange', updateChart);
+        updateChart(); // 초기 업데이트
+      }
+      
+      /**************************************************
+       * 11. updateChart – 선택된 직군에 따라 Chart 데이터를 그룹화
+       **************************************************/
+      function updateChart() {
+        // 현재 필터 상태에서 선택된 직군 추출
+        var state = jobCategoryFilter.getState();
+        var selectedCategories = state.selectedValues;
+        // 만약 선택이 없다면 전체 직군 사용
+        if (!selectedCategories || selectedCategories.length === 0) {
+          selectedCategories = [];
+          for (var i = 0; i < dataTable.getNumberOfRows(); i++) {
+            var val = dataTable.getValue(i, 0);
+            if (selectedCategories.indexOf(val) === -1) {
+              selectedCategories.push(val);
+            }
+          }
+        }
+        
+        // dataTable에서 '직군'이 selectedCategories에 해당하는 행만 필터링
+        var filteredRows = dataTable.getFilteredRows([{
+          column: 0,
+          test: function(value) {
+            return selectedCategories.indexOf(value) !== -1;
+          }
+        }]);
+        
+        var filteredData = new google.visualization.DataTable();
+        // 컬럼 복사
+        for (var col = 0; col < dataTable.getNumberOfColumns(); col++) {
+          filteredData.addColumn(dataTable.getColumnType(col), dataTable.getColumnLabel(col));
+        }
+        // 필터링된 행 추가
+        for (var i = 0; i < filteredRows.length; i++) {
+          var rowValues = [];
+          for (var j = 0; j < dataTable.getNumberOfColumns(); j++) {
+            rowValues.push(dataTable.getValue(filteredRows[i], j));
+          }
+          filteredData.addRow(rowValues);
+        }
+        
+        // '경력연차'(col 1)를 기준으로 그룹화하여 예상연봉(col 2)와 실제연봉(col 3)의 평균 계산
+        var aggregatedData = google.visualization.data.group(
+          filteredData,
+          [{ column: 1 }],
+          [
+            { column: 2, aggregation: google.visualization.data.avg, type: 'number', label: '예상연봉(만원)' },
+            { column: 3, aggregation: google.visualization.data.avg, type: 'number', label: '실제연봉(만원)' }
+          ]
+        );
+        
+        // 그룹화된 데이터의 경력연차에 "년차" 포맷 적용
+        for (var i = 0; i < aggregatedData.getNumberOfRows(); i++) {
+          var yr = aggregatedData.getValue(i, 0);
+          aggregatedData.setFormattedValue(i, 0, yr + "년차");
+        }
+        
+        chart.setDataTable(aggregatedData);
+        chart.draw();
+      }
+    </script>
+  </head>
+  <body>
+    <h1>직군별 경력연차 연봉 그래프</h1>
+    <div id="dashboard_div">
+      <div id="jobCategory_filter_div" class="filter-container"></div>
+      <div id="chart_div" style="width: 100%; height: 500px;"></div>
+      <div id="table_div"></div>
+    </div>
+  </body>
+</html>
